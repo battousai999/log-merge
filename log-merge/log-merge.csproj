@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Battousai.ConsoleUtils" Version="1.0.0" />
+    <PackageReference Include="Battousai.ConsoleUtils" Version="1.1.0" />
     <PackageReference Include="FluentCommandLineParser.NETStandard" Version="1.5.0.31-commands" />
   </ItemGroup>
 

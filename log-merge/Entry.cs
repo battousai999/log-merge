@@ -7,6 +7,7 @@ namespace log_merge
 {
     public class Entry
     {
+        public string RawText { get; }
         public string Filename { get; }
         public int LineNumber { get; }
         public DateTimeOffset LogDate { get; }
@@ -14,8 +15,9 @@ namespace log_merge
         public int PatternMatchStart { get; }
         public int PatternMatchLength { get; }
 
-        public Entry(string filename, int lineNumber, DateTimeOffset logDate, int patternMatchStart, int patternMatchLength, IEnumerable<string> lines)
+        public Entry(string rawText, string filename, int lineNumber, DateTimeOffset logDate, int patternMatchStart, int patternMatchLength, IEnumerable<string> lines)
         {
+            this.RawText = rawText;
             this.Filename = filename;
             this.LineNumber = lineNumber;
             this.LogDate = logDate;

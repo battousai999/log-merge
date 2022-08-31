@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Fclp;
 using Fclp.Internals.Extensions;
+using Battousai.Utils.StringUtils;
 using static Battousai.Utils.ConsoleUtils;
 
 namespace log_merge
@@ -38,6 +39,14 @@ namespace log_merge
                 parser.Setup(x => x.ShowHelp)
                     .As('h', "help")
                     .WithDescription("Show this help information".WithIndent(15));
+
+                parser.Setup(x => x.Filter)
+                    .As('f', "filter")
+                    .WithDescription("<text>         Filter for second capture group in header regex");
+
+                parser.Setup(x => x.Find)
+                    .As('s', "search")
+                    .WithDescription("<text>         Filter for entries containing search text");
 
                 var results = parser.Parse(args);
 
@@ -73,9 +82,10 @@ namespace log_merge
                 }
 
                 var parameters = parser.Object;
-                var filenames = parameters.LogFilenames.SelectMany(x => x.ContainsWildcards() ? EnumerateFiles(x) : x.ToSingleton()).ToList();
+                var filenames = parameters.LogFilenames.SelectMany(x => x.ContainsWildcards() ? EnumerateFiles(x) : x.ToSingleton());
                 var isRedirected = Console.IsOutputRedirected;
-                var num = filenames.Count;
+                var num = filenames.Count();
+                var filterHitCount = 0;
 
                 Action<string> writeProgress = str =>
                 {
@@ -83,8 +93,9 @@ namespace log_merge
                         return;
 
                     var startingPos = Console.CursorTop;
-                    var spaces = new String(' ', Console.WindowWidth - str.Length - 1);
-                    var text = str + spaces;
+                    var adjustedStr = str.PadRightWithEllipsis(Console.WindowWidth - 1);
+                    var spaces = new String(' ', Console.WindowWidth - adjustedStr.Length - 1);
+                    var text = adjustedStr + spaces;
 
                     Console.Write(text);
                     Console.SetCursorPosition(0, startingPos);
@@ -116,21 +127,54 @@ namespace log_merge
                             }
                             else
                             {
-                                var percent = (int)((double)counter / (double)num * 100.0);
-                                writeProgress($"Reading files [{counter + 1}/{num}] ({percent}%): {x}...");
+                                if (filterHitCount > 0)
+                                {
+                                    var countStr = filterHitCount == 1 ? "hit" : "hits";
+                                    writeProgress($"Reading files [{counter + 1}/{num}] <{filterHitCount:#,##0} {countStr}>: {x}...");
+                                }
+                                else
+                                    writeProgress($"Reading files [{counter + 1}/{num}]: {x}...");
                             }
 
                             var values = Utils.WriteSafeReadAllLines(x).Select((y, i) => new { LineNumber = i + 1, LineText = y });
 
                             return values.Select(value => new { Filename = x, value.LineNumber, value.LineText });
-                        })
-                        .ToList();
+                        });
 
                     var startPattern = new Regex(parameters.StartPattern, RegexOptions.IgnoreCase);
 
+                    Func<string, bool> isInFilter = text =>
+                    {
+                        var match = startPattern.Match(text);
+
+                        if (!match.Success || match.Groups.Count < 3)
+                            throw new InvalidOperationException("The header regex did not contain a second capture group (with which to filter).");
+
+                        var result = match.Groups[2]?.Value.Contains(parameters.Filter, StringComparison.OrdinalIgnoreCase) ?? false;
+
+                        if (result)
+                            filterHitCount += 1;
+
+                        return result;
+                    };
+
+                    Func<Entry, bool> isInSearch = entry =>
+                    {
+                        if (entry == null)
+                            return true;
+
+                        var result = entry.RawText.Contains(parameters.Find, StringComparison.OrdinalIgnoreCase) ||
+                            entry.Lines.Any(x => x.Contains(parameters.Find, StringComparison.OrdinalIgnoreCase));
+
+                        if (result)
+                            filterHitCount += 1;
+
+                        return result;
+                    };
+
                     // Parse lines in log files into Entry objects...
-                    var entries = content.Aggregate(
-                        new List<Entry>(),
+                    var aggregatedEntries = content.Aggregate(
+                        new { Results = new List<Entry>(), IsSkipping = true, CurrentEntry = (Entry)null },
                         (acc, x) =>
                         {
                             var lineNumber = x.LineNumber;
@@ -138,25 +182,55 @@ namespace log_merge
                             var filename = x.Filename;
 
                             var match = startPattern.Match(text);
+                            var newIsSkipping = acc.IsSkipping;
+                            Entry newCurrentEntry = acc.CurrentEntry;
 
                             if (match.Success)
                             {
                                 var logDate = DateTimeOffset.Parse(match.Groups[1].Value, null, DateTimeStyles.AssumeUniversal);
+                                var passesFilter = String.IsNullOrWhiteSpace(parameters.Filter) || isInFilter(text);                                
 
-                                acc.Add(new Entry(filename, lineNumber, logDate, match.Index, match.Length, text.ToSingleton()));
+                                if (passesFilter)
+                                {
+                                    // Check previous entry to ensure that it "passes search"
+                                    var passesSearch = String.IsNullOrWhiteSpace(parameters.Find) || isInSearch(acc.CurrentEntry);
+
+                                    if (!passesSearch)
+                                        acc.Results.Remove(acc.CurrentEntry);
+
+                                    newCurrentEntry = new Entry(text, filename, lineNumber, logDate, match.Index, match.Length, text.ToSingleton());
+                                    acc.Results.Add(newCurrentEntry);
+                                    newIsSkipping = false;
+                                }
+                                else
+                                    newIsSkipping = true;
                             }
                             else
                             {
-                                var lastEntry = acc.LastOrDefault();
+                                if (!acc.IsSkipping)
+                                {
+                                    var lastEntry = acc.Results.LastOrDefault();
 
-                                if (lastEntry == null)
-                                    throw new InvalidOperationException("First line must contain a entry header.");
+                                    if (lastEntry == null)
+                                        throw new InvalidOperationException("First line must contain a entry header.");
 
-                                lastEntry.Lines.Add(text);
+                                    lastEntry.Lines.Add(text);
+                                }
                             }
 
-                            return acc;
+                            return new { acc.Results, IsSkipping = newIsSkipping, CurrentEntry = newCurrentEntry };
                         });
+
+                    if (aggregatedEntries.CurrentEntry != null)
+                    {
+                        // Check previous entry to ensure that it "passes search"
+                        var passesSearch = String.IsNullOrWhiteSpace(parameters.Find) || isInSearch(aggregatedEntries.CurrentEntry);
+
+                        if (!passesSearch)
+                            aggregatedEntries.Results.Remove(aggregatedEntries.CurrentEntry);
+                    }
+
+                    var entries = aggregatedEntries.Results;
 
                     clearProgress();
 

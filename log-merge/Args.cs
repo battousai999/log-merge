@@ -10,5 +10,7 @@ namespace log_merge
         public string StartPattern { get; set; }
         public bool NoColor { get; set; }
         public bool ShowHelp { get; set; }
+        public string Filter { get; set; }
+        public string Find { get; set; }
     }
 }
