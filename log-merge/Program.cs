@@ -73,88 +73,138 @@ namespace log_merge
                 }
 
                 var parameters = parser.Object;
+                var filenames = parameters.LogFilenames.SelectMany(x => x.ContainsWildcards() ? EnumerateFiles(x) : x.ToSingleton()).ToList();
+                var isRedirected = Console.IsOutputRedirected;
+                var num = filenames.Count;
 
-                var content = parameters.LogFilenames
-                    .SelectMany(x => x.ContainsWildcards() ? EnumerateFiles(x) : x.ToSingleton())
-                    .SelectMany(x =>
-                    {
-                        var values = Utils.WriteSafeReadAllLines(x).Select((y, i) => new { LineNumber = i + 1, LineText = y });
-
-                        return values.Select(value => new { Filename = x, value.LineNumber, value.LineText });
-                    });
-
-                var startPattern = new Regex(parameters.StartPattern, RegexOptions.IgnoreCase);
-
-                // Parse lines in log files into Entry objects...
-                var entries = content.Aggregate(
-                    new List<Entry>(),
-                    (acc, x) =>
-                    {
-                        var lineNumber = x.LineNumber;
-                        var text = x.LineText;
-                        var filename = x.Filename;
-
-                        var match = startPattern.Match(text);
-
-                        if (match.Success)
-                        {
-                            var logDate = DateTimeOffset.Parse(match.Groups[1].Value, null, DateTimeStyles.AssumeUniversal);
-
-                            acc.Add(new Entry(filename, lineNumber, logDate, match.Index, match.Length, text.ToSingleton()));
-                        }
-                        else
-                        {
-                            var lastEntry = acc.LastOrDefault();
-
-                            if (lastEntry == null)
-                                throw new InvalidOperationException("First line must contain a entry header.");
-
-                            lastEntry.Lines.Add(text);
-                        }
-
-                        return acc;
-                    });
-
-                // Write ordered entries to output...
-                Action<string, int, int> writeHeaderLine = (text, index, count) =>
+                Action<string> writeProgress = str =>
                 {
-                    if (parameters.NoColor)
-                    {
-                        Console.WriteLine(text);
+                    if (isRedirected)
                         return;
-                    }
 
-                    var pretext = text.Substring(0, index);
-                    var innerText = text.Substring(index, count);
-                    var remainingText = text.Substring(index + count);
+                    var startingPos = Console.CursorTop;
+                    var spaces = new String(' ', Console.WindowWidth - str.Length - 1);
+                    var text = str + spaces;
 
-                    if (!String.IsNullOrEmpty(pretext))
-                        Console.Write(pretext);
-
-                    var saveColor = Console.ForegroundColor;
-                    Console.ForegroundColor = ConsoleColor.Cyan;
-                    Console.Write(innerText);
-                    Console.ForegroundColor = saveColor;
-
-                    Console.WriteLine(remainingText);
+                    Console.Write(text);
+                    Console.SetCursorPosition(0, startingPos);
                 };
 
-                Action<string> writeLine = text => Console.WriteLine(text);
-
-                var orderedEntries = entries
-                    .OrderBy(x => x.LogDate)
-                    .ThenBy(x => x, LogEntryComparer.Default)
-                    .ToList();
-
-                orderedEntries.ForEach(entry =>
+                Action clearProgress = () =>
                 {
-                    var firstLine = entry.Lines.First();
-                    var remainingLines = entry.Lines.Skip(1);
+                    if (isRedirected)
+                        return;
 
-                    writeHeaderLine(firstLine, entry.PatternMatchStart, entry.PatternMatchLength);
-                    remainingLines.ForEach(x => writeLine(x));
-                });
+                    var startingPos = Console.CursorTop;
 
+                    Console.SetCursorPosition(0, startingPos);
+                    Console.Write(new String(' ', Console.WindowWidth - 1));
+                    Console.SetCursorPosition(0, startingPos);
+                };
+
+                try
+                {
+                    if (!isRedirected)
+                        Console.CursorVisible = false;
+
+                    var content = filenames
+                        .SelectMany((x, counter) =>
+                        {
+                            if (num == 1)
+                            {
+                                writeProgress($"Reading file: {x}...");
+                            }
+                            else
+                            {
+                                var percent = (int)((double)counter / (double)num * 100.0);
+                                writeProgress($"Reading files [{counter + 1}/{num}] ({percent}%): {x}...");
+                            }
+
+                            var values = Utils.WriteSafeReadAllLines(x).Select((y, i) => new { LineNumber = i + 1, LineText = y });
+
+                            return values.Select(value => new { Filename = x, value.LineNumber, value.LineText });
+                        })
+                        .ToList();
+
+                    var startPattern = new Regex(parameters.StartPattern, RegexOptions.IgnoreCase);
+
+                    // Parse lines in log files into Entry objects...
+                    var entries = content.Aggregate(
+                        new List<Entry>(),
+                        (acc, x) =>
+                        {
+                            var lineNumber = x.LineNumber;
+                            var text = x.LineText;
+                            var filename = x.Filename;
+
+                            var match = startPattern.Match(text);
+
+                            if (match.Success)
+                            {
+                                var logDate = DateTimeOffset.Parse(match.Groups[1].Value, null, DateTimeStyles.AssumeUniversal);
+
+                                acc.Add(new Entry(filename, lineNumber, logDate, match.Index, match.Length, text.ToSingleton()));
+                            }
+                            else
+                            {
+                                var lastEntry = acc.LastOrDefault();
+
+                                if (lastEntry == null)
+                                    throw new InvalidOperationException("First line must contain a entry header.");
+
+                                lastEntry.Lines.Add(text);
+                            }
+
+                            return acc;
+                        });
+
+                    clearProgress();
+
+                    // Write ordered entries to output...
+                    Action<string, int, int> writeHeaderLine = (text, index, count) =>
+                    {
+                        if (parameters.NoColor)
+                        {
+                            Console.WriteLine(text);
+                            return;
+                        }
+
+                        var pretext = text.Substring(0, index);
+                        var innerText = text.Substring(index, count);
+                        var remainingText = text.Substring(index + count);
+
+                        if (!String.IsNullOrEmpty(pretext))
+                            Console.Write(pretext);
+
+                        var saveColor = Console.ForegroundColor;
+                        Console.ForegroundColor = ConsoleColor.Cyan;
+                        Console.Write(innerText);
+                        Console.ForegroundColor = saveColor;
+
+                        Console.WriteLine(remainingText);
+                    };
+
+                    Action<string> writeLine = text => Console.WriteLine(text);
+
+                    var orderedEntries = entries
+                        .OrderBy(x => x.LogDate)
+                        .ThenBy(x => x, LogEntryComparer.Default)
+                        .ToList();
+
+                    orderedEntries.ForEach(entry =>
+                    {
+                        var firstLine = entry.Lines.First();
+                        var remainingLines = entry.Lines.Skip(1);
+
+                        writeHeaderLine(firstLine, entry.PatternMatchStart, entry.PatternMatchLength);
+                        remainingLines.ForEach(x => writeLine(x));
+                    });
+                }
+                finally
+                {
+                    if (!isRedirected)
+                        Console.CursorVisible = true;
+                }
             }, false, false);
         }
 
