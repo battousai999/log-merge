@@ -48,6 +48,19 @@ namespace log_merge
                     .As('s', "search")
                     .WithDescription("<text>         Filter for entries containing search text");
 
+                parser.Setup(x => x.FromStr)
+                    .As("from")
+                    .WithDescription("<date>         The date after which to include log entries in the results");
+
+                parser.Setup(x => x.ToStr)
+                    .As("to")
+                    .WithDescription("<date>         The date before which to include log entries in the results");
+
+                parser.Setup(x => x.DateRangeAsUtc)
+                    .As("utc")
+                    .SetDefault(false)
+                    .WithDescription("Treat date range values as UTC".WithIndent(15));
+
                 var results = parser.Parse(args);
 
                 if (results.HasErrors || parser.Object.ShowHelp)
@@ -86,6 +99,22 @@ namespace log_merge
                 var isRedirected = Console.IsOutputRedirected;
                 var num = filenames.Count();
                 var filterHitCount = 0;
+                var isFromGiven = !String.IsNullOrWhiteSpace(parameters.FromStr);
+                var isToGiven = !String.IsNullOrWhiteSpace(parameters.ToStr);
+                var (isFromValid, fromDateAttemptStr, fromDate) = Utils.ParseDateTimeOffset(parameters.FromStr, parameters.DateRangeAsUtc);
+                var (isToValid, toDateAttemptStr, toDate) = Utils.ParseDateTimeOffset(parameters.ToStr, parameters.DateRangeAsUtc);
+
+                if (isFromGiven && !isFromValid)
+                {
+                    Log($"The 'from' date ({fromDateAttemptStr}) was not a valid date.");
+                    return;
+                }
+
+                if (isToGiven && !isToValid)
+                {
+                    Log($"The 'to' date ({toDateAttemptStr}) was not a valid date.");
+                    return;
+                }
 
                 Action<string> writeProgress = str =>
                 {
@@ -172,6 +201,17 @@ namespace log_merge
                         return result;
                     };
 
+                    Func<DateTimeOffset, bool> isInDateRange = date =>
+                    {
+                        if (fromDate.HasValue && date < fromDate)
+                            return false;
+
+                        if (toDate.HasValue && date > toDate)
+                            return false;
+
+                        return true;
+                    };
+
                     // Parse lines in log files into Entry objects...
                     var aggregatedEntries = content.Aggregate(
                         new { Results = new List<Entry>(), IsSkipping = true, CurrentEntry = (Entry)null },
@@ -188,7 +228,7 @@ namespace log_merge
                             if (match.Success)
                             {
                                 var logDate = DateTimeOffset.Parse(match.Groups[1].Value, null, DateTimeStyles.AssumeUniversal);
-                                var passesFilter = String.IsNullOrWhiteSpace(parameters.Filter) || isInFilter(text);                                
+                                var passesFilter = isInDateRange(logDate) && (String.IsNullOrWhiteSpace(parameters.Filter) || isInFilter(text));                                
 
                                 if (passesFilter)
                                 {

@@ -2,11 +2,14 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace log_merge
 {
     public static class Utils
     {
+        private static readonly Regex specifiesOffsetRegex = new Regex(@"[-+]\d{1,2}(:\d{2})$");
+
         public static IEnumerable<T> ToSingleton<T>(this T item)
         {
             yield return item;
@@ -35,6 +38,29 @@ namespace log_merge
 
                 return file.ToArray();
             }
+        }
+
+        public static (bool, string, DateTimeOffset?) ParseDateTimeOffset(string dateStr, bool parseAsUtc)
+        {
+            if (String.IsNullOrWhiteSpace(dateStr))
+                return (false, dateStr, null);
+
+            if (DateTimeOffset.TryParse(dateStr, out DateTimeOffset date))
+            {
+                var specifiesOffset = specifiesOffsetRegex.IsMatch(dateStr);
+                var isUtc = date.Offset == TimeSpan.Zero;
+                var annotatedDateStr = dateStr + " +00:00";
+
+                if (!specifiesOffset && parseAsUtc && !isUtc)
+                {
+                    if (!DateTimeOffset.TryParse(annotatedDateStr, out date))
+                        return (false, annotatedDateStr, null);
+                }
+
+                return (true, dateStr, date);
+            }
+            else
+                return (false, dateStr, null);
         }
     }
 }

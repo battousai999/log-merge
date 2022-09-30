@@ -12,5 +12,8 @@ namespace log_merge
         public bool ShowHelp { get; set; }
         public string Filter { get; set; }
         public string Find { get; set; }
+        public string FromStr { get; set; }
+        public string ToStr { get; set; }
+        public bool DateRangeAsUtc { get; set; }
     }
 }
