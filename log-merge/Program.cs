@@ -181,9 +181,6 @@ namespace log_merge
 
                         var result = match.Groups[2]?.Value.Contains(parameters.Filter, StringComparison.OrdinalIgnoreCase) ?? false;
 
-                        if (result)
-                            filterHitCount += 1;
-
                         return result;
                     };
 
@@ -194,9 +191,6 @@ namespace log_merge
 
                         var result = entry.RawText.Contains(parameters.Find, StringComparison.OrdinalIgnoreCase) ||
                             entry.Lines.Any(x => x.Contains(parameters.Find, StringComparison.OrdinalIgnoreCase));
-
-                        if (result)
-                            filterHitCount += 1;
 
                         return result;
                     };
@@ -211,6 +205,9 @@ namespace log_merge
 
                         return true;
                     };
+
+                    var hasFilter = !String.IsNullOrWhiteSpace(parameters.Filter);
+                    var hasSearch = !String.IsNullOrWhiteSpace(parameters.Find);
 
                     // Parse lines in log files into Entry objects...
                     var aggregatedEntries = content.Aggregate(
@@ -228,15 +225,19 @@ namespace log_merge
                             if (match.Success)
                             {
                                 var logDate = DateTimeOffset.Parse(match.Groups[1].Value, null, DateTimeStyles.AssumeUniversal);
-                                var passesFilter = isInDateRange(logDate) && (String.IsNullOrWhiteSpace(parameters.Filter) || isInFilter(text));                                
+                                var passesFilter = isInDateRange(logDate) && (!hasFilter || isInFilter(text));                                
 
                                 if (passesFilter)
                                 {
                                     // Check previous entry to ensure that it "passes search"
-                                    var passesSearch = String.IsNullOrWhiteSpace(parameters.Find) || isInSearch(acc.CurrentEntry);
+                                    var passesSearch = !hasSearch || isInSearch(acc.CurrentEntry);
 
                                     if (!passesSearch)
                                         acc.Results.Remove(acc.CurrentEntry);
+                                    else if ((hasFilter || hasSearch) && acc.CurrentEntry != null)
+                                    {
+                                        filterHitCount += 1;
+                                    }
 
                                     newCurrentEntry = new Entry(text, filename, lineNumber, logDate, match.Index, match.Length, text.ToSingleton());
                                     acc.Results.Add(newCurrentEntry);
